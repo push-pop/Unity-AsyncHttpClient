@@ -13,8 +13,15 @@ using UnityAsyncHttp.Utilities;
 
 namespace UnityAsyncHttp.Rest.Client
 {
+
+
     public class RESTClient
     {
+        public enum ResponseType
+        {
+            Text,
+            File
+        }
         public RESTClient(string host, int port)
         {
             _host = host;
@@ -31,9 +38,14 @@ namespace UnityAsyncHttp.Rest.Client
         private static readonly HttpClient _client = new HttpClient();
         CancellationTokenSource tokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(10f));
 
-        public void Get(string path, Action<string> callback = null)
+        public void Get(string path, ResponseType respType = ResponseType.Text, Action<string> callback = null)
         {
             MakeRequest(path, HttpMethod.Get, null, callback);
+        }
+
+        public void GetFile(string path, string fileName, Action<string> callback = null)
+        {
+            MakeRequest(path, HttpMethod.Get, null, callback, ResponseType.File, fileName);
         }
 
         public void Put(string path, Dictionary<string, string> content = null, Action<string> callback = null)
@@ -46,7 +58,6 @@ namespace UnityAsyncHttp.Rest.Client
         public void Post(string path, Dictionary<string, string> content = null, Action<string> callback = null)
         {
             HttpContent httpContent = new StringContent(content.ToJSONString(), Encoding.UTF8, "application/json");
-
 
             MakeRequest(path, HttpMethod.Post, httpContent, callback);
         }
@@ -123,8 +134,12 @@ namespace UnityAsyncHttp.Rest.Client
             UploadFiles(new List<string>() { filePath }, reqPath, formData, callback);
         }
 
+        void MakeRequest(string path, HttpMethod method, HttpContent content = null, Action<string> callback = null, ResponseType respType = ResponseType.Text, string fileSavePath = null)
+        {
+            Task.Run(() => MakeRequestAsync(path, method, content, respType, callback, fileSavePath));
+        }
 
-        void MakeRequest(string path, HttpMethod method, HttpContent content, Action<string> callback)
+        async void MakeRequestAsync(string path, HttpMethod method, HttpContent content, ResponseType respType, Action<string> callback, string fileSavePath)
         {
             UriBuilder uriBuilder = new UriBuilder()
             {
@@ -133,25 +148,31 @@ namespace UnityAsyncHttp.Rest.Client
                 Path = path
             };
 
-            HttpRequestMessage req = new HttpRequestMessage(method, uriBuilder.Uri);
-            req.Content = content;
+            var msg = new HttpRequestMessage(method, uriBuilder.Uri);
 
-            MakeRequest(req, callback);
-        }
+            if (content != null)
+                msg.Content = content;
 
-        void MakeRequest(HttpRequestMessage req, Action<string> callback = null)
-        {
-            Task.Run(() => MakeRequestAsync(req, callback));
-        }
+            var res = await _client.SendAsync(msg, CancellationToken.None);
 
-        async void MakeRequestAsync(HttpRequestMessage req, Action<string> callback)
-        {
-            var strRes = "";
+            if (res.IsSuccessStatusCode)
+            {
+                if (respType == ResponseType.Text)
+                {
+                    var str = await res.Content.ReadAsStringAsync();
+                    Dispatcher.RunOnMainThread(() => callback?.Invoke(str));
+                }
 
-            var res = await _client.SendAsync(req, CancellationToken.None);
-            strRes = await res.Content.ReadAsStringAsync();
-
-            Dispatcher.RunOnMainThread(() => callback?.Invoke(strRes));
+                else if (respType == ResponseType.File)
+                {
+                    var fullPath = Path.Combine(UnityEngine.Application.persistentDataPath, fileSavePath);
+                    using (var fs = new FileStream(fullPath, FileMode.CreateNew))
+                    {
+                        await res.Content.CopyToAsync(fs);
+                        Dispatcher.RunOnMainThread(() => callback?.Invoke(fullPath));
+                    }
+                }
+            }
         }
     }
 
