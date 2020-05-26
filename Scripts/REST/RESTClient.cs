@@ -10,10 +10,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityAsyncHttp.Content;
 using UnityAsyncHttp.Utilities;
+using UnityEngine;
 
 namespace UnityAsyncHttp.Rest.Client
 {
-
+    public class RequestParams : Dictionary<string, object> { }
 
     public class RESTClient
     {
@@ -35,31 +36,34 @@ namespace UnityAsyncHttp.Rest.Client
         public Action<string> OnError;
         public Action<float> OnUploadProgress;
 
-        private static readonly HttpClient _client = new HttpClient();
+        private static readonly HttpClient _client = new HttpClient()
+        {
+            Timeout = TimeSpan.FromSeconds(5f)
+        };
         CancellationTokenSource tokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(10f));
 
-        public void Get(string path, ResponseType respType = ResponseType.Text, Action<string> callback = null)
+        public void Get(string path, string query = "", RequestParams content = null, ResponseType respType = ResponseType.Text, Action<string> callback = null)
         {
-            MakeRequest(path, HttpMethod.Get, null, callback);
+            MakeRequest(path, HttpMethod.Get, query, content == null ? null : new StringContent(content.ToJSONString(), Encoding.UTF8, "application/json"), callback);
         }
 
         public void GetFile(string path, string fileName, Action<string> callback = null)
         {
-            MakeRequest(path, HttpMethod.Get, null, callback, ResponseType.File, fileName);
+            MakeRequest(path: path, method: HttpMethod.Get, content: null, callback: callback, respType: ResponseType.File, fileSavePath: fileName);
         }
 
         public void Put(string path, Dictionary<string, string> content = null, Action<string> callback = null)
         {
             HttpContent httpContent = new StringContent(content.ToJSONString(), Encoding.UTF8, "application/json");
 
-            MakeRequest(path, HttpMethod.Put, httpContent, callback);
+            MakeRequest(path, HttpMethod.Put, content: httpContent, callback: callback);
         }
 
         public void Post(string path, Dictionary<string, string> content = null, Action<string> callback = null)
         {
             HttpContent httpContent = new StringContent(content.ToJSONString(), Encoding.UTF8, "application/json");
 
-            MakeRequest(path, HttpMethod.Post, httpContent, callback);
+            MakeRequest(path, HttpMethod.Post, content: httpContent, callback: callback);
         }
 
         public void UploadFiles(List<string> filePaths, string reqPath, Dictionary<string, string> formData = null, Action<string> callback = null)
@@ -119,7 +123,7 @@ namespace UnityAsyncHttp.Rest.Client
 
             }
 
-            MakeRequest(reqPath, HttpMethod.Post, multi, (str) =>
+            MakeRequest(reqPath, HttpMethod.Post, content: multi, callback: (str) =>
             {
                 foreach (var stream in streams)
                 {
@@ -134,26 +138,29 @@ namespace UnityAsyncHttp.Rest.Client
             UploadFiles(new List<string>() { filePath }, reqPath, formData, callback);
         }
 
-        void MakeRequest(string path, HttpMethod method, HttpContent content = null, Action<string> callback = null, ResponseType respType = ResponseType.Text, string fileSavePath = null)
+        void MakeRequest(string path, HttpMethod method, string query = "", HttpContent content = null, Action<string> callback = null, ResponseType respType = ResponseType.Text, string fileSavePath = null)
         {
-            Task.Run(() => MakeRequestAsync(path, method, content, respType, callback, fileSavePath));
+            Task.Run(() => MakeRequestAsync(path, method, query, content, respType, callback, fileSavePath));
         }
 
-        async void MakeRequestAsync(string path, HttpMethod method, HttpContent content, ResponseType respType, Action<string> callback, string fileSavePath)
+        async void MakeRequestAsync(string path, HttpMethod method, string query, HttpContent content, ResponseType respType, Action<string> callback, string fileSavePath)
         {
             UriBuilder uriBuilder = new UriBuilder()
             {
                 Host = _host,
-                Port = _port,
-                Path = path
+                Port = _port == 80 ? -1 : _port,
+                Path = path,
+                Query = query,
+                Scheme = Uri.UriSchemeHttps
             };
+            Debug.Log(uriBuilder.Uri.ToString());
+            Debug.Log(content);
 
             var msg = new HttpRequestMessage(method, uriBuilder.Uri);
 
             if (content != null)
                 msg.Content = content;
-
-            var res = await _client.SendAsync(msg, CancellationToken.None);
+            var res = await _client.SendAsync(msg);
 
             if (res.IsSuccessStatusCode)
             {
@@ -173,12 +180,21 @@ namespace UnityAsyncHttp.Rest.Client
                     }
                 }
             }
+            else
+            {
+                throw new Exception(res.ReasonPhrase);
+            }
         }
     }
 
     public static class DictionaryExt
     {
         public static string ToJSONString(this Dictionary<string, string> dict)
+        {
+            return JsonConvert.SerializeObject(dict);
+        }
+
+        public static string ToJSONString(this Dictionary<string, object> dict)
         {
             return JsonConvert.SerializeObject(dict);
         }
